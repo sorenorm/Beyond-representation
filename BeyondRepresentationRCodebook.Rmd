@@ -1,0 +1,1849 @@
+---
+title: "Beyond Representation Codebook"
+output: html_document
+date: "2024-09-16"
+---
+
+Loading the necessary package
+
+```{r}
+library(pacman)
+
+p_load(ade4, cluster, tidyverse, wesanderson, ggridges)
+
+
+theme_set(theme_minimal())
+
+c_F = wes_palette("Rushmore1")[4]
+c_M = wes_palette('Rushmore1')[1]
+c_neu = wes_palette("Royal1")[1]
+c_line = wes_palette("Rushmore1")[3]
+
+```
+
+
+# Investigating Parlamentary membership
+
+Pre-processing the CCS files, extracting social class, education, and religiosity. 
+
+```{r}
+dCCSI = haven::read_sav('CCS-I/620_CCS_Data_Wave1_v4.0.sav') %>% 
+  filter(t1 %in% c(5,6,7,8,10,11,12,13,14,15,16,18,19,21,23)) %>% 
+  mutate(country = NA,
+         country = ifelse(t1 == 5, 'GR', country),
+         country = ifelse(t1 == 6, 'FI', country),
+         country = ifelse(t1 == 7, 'BE', country),
+         country = ifelse(t1 == 8, 'NL', country),
+         country = ifelse(t1 == 10, 'PT', country),
+         country = ifelse(t1 == 11, 'EE', country),
+         country = ifelse(t1 == 12, 'IS', country),
+         country = ifelse(t1 == 13, 'HU', country),
+         country = ifelse(t1 == 14, 'AT', country),
+         country = ifelse(t1 == 15, 'SE', country),
+         country = ifelse(t1 == 16, 'DK', country),
+         country = ifelse(t1 == 18, 'CZ', country),
+         country = ifelse(t1 == 19, 'NO', country),
+         country = ifelse(t1 == 21, 'IT', country),
+         country = ifelse(t1 == 23, 'GB', country),
+         religion = ifelse(e9 == 7, 'Never', NA),
+         religion = ifelse(e9 %in% c(6,5,4), 'Rarely', religion),
+         religion = ifelse(e9 %in% c(3,2), 'At least once a month', religion),
+         religion = ifelse(e9 == 1, 'At least once a week', religion),
+         #1 (Never), 2 (Rarely) 3 (At least once a month) and 4 (At least once a week).
+         education = ifelse(e6a == 1, 'Shorter education', NA),
+         education = ifelse(e6a == 2, 'Shorter education', education),
+         education = ifelse(e6a == 3, 'Shorter education', education),
+         education = ifelse(e6a == 4, 'Shorter education', education), # was med
+         education = ifelse(e6a == 5, 'Medium education', education),
+         education = ifelse(e6a == 6, 'Medium education', education),
+         education = ifelse(e6a == 7, 'Longer education', education),
+         education = ifelse(country == 'HU' & e6a == 1, 'Shorter education', education),
+         education = ifelse(country == 'HU' & e6a == 2, 'Shorter education', education), # was med
+         education = ifelse(country == 'HU' & e6a == 3, 'Medium education', education),
+         education = ifelse(country == 'HU' & e6a == 4, 'Medium education', education),
+         education = ifelse(country == 'HU' & e6a == 5, 'Longer education', education),
+         education = ifelse(country == 'HU' & e6a == 6, 'Longer education', education),
+         education = ifelse(country == 'NO' & e6a == 1, 'Shorter education', education),
+         education = ifelse(country == 'NO' & e6a == 2, 'Shorter education', education),
+         education = ifelse(country == 'NO' & e6a == 3, 'Medium education', education),
+         education = ifelse(country == 'NO' & e6a == 4, 'Medium education', education),
+         education = ifelse(country == 'NO' & e6a == 5, 'Medium education', education),
+         education = ifelse(country == 'NO' & e6a == 6, 'Medium education', education),
+         education = ifelse(country == 'NO' & e6a == 7, 'Longer education', education),
+         education = ifelse(country == 'NO' & e6a == 8, 'Longer education', education),
+         education = ifelse(country == 'NO' & e6a == 9, 'Longer education', education),
+         e8 = as.numeric(e8),
+         year = t3,
+         countryYear = paste(country, year),
+         age = year - e2,
+         gender = ifelse(e1 == 1, 'M', 'F'),
+         socialClass = ifelse(e8 %in% c(21, 22, 23, 24, 11, 12, 13, 31, 32, 33, 34, 105, 106, 107, 114, 113, 110), 
+                              'Salariat', NA),
+         socialClass = ifelse(e8 %in% c(01, 91, 92, 93, 94, 96, 81, 82, 83, 84, 112), 
+                              'Working class', socialClass),
+         socialClass = ifelse(e8 %in% c(41, 42, 43, 51, 52, 53, 61, 62, 71, 72, 73, 74, 115, 108, 111, 112), 
+                              'Intermediate employees', socialClass),
+         elected =  as.numeric(as.factor(t8))
+         )
+
+dCCSI = dCCSI %>% mutate(socialClass2 = ifelse(e7 == 1, 'Self-employed', NA),
+                         socialClass = coalesce(socialClass2, socialClass))
+
+
+
+dCCSII = haven::read_sav('CCS-II/886_CCS_Data_Module2_v5.0.0.sav', encoding = 'latin1') %>% 
+  filter(T1 %in% c(4,6,7,8,12,14,15,16,18,19,20,21,22,23,26,27,28,29,30)) %>% 
+  mutate(country = NA,
+         country = ifelse(T1 == 4, 'GR', country),  # 2015
+         country = ifelse(T1 == 6, 'SE', country),  # 2014
+         country = ifelse(T1 == 7, 'NO', country),  # 2013
+         country = ifelse(T1 == 8, 'HU', country),  # 2014
+         country = ifelse(T1 == 12, 'IS', country), # 2013
+         country = ifelse(T1 == 14, 'EE', country), # 2015
+         country = ifelse(T1 == 15, 'FI', country), # 2015
+         country = ifelse(T1 == 16, 'PT', country), # 2015
+         country = ifelse(T1 == 18, 'BE', country), # 2014
+         country = ifelse(T1 == 19, 'IS', country), # 2016
+         country = ifelse(T1 == 20, 'IS', country), # 2017
+         country = ifelse(T1 == 21, 'CZ', country), # 2017
+         country = ifelse(T1 == 26, 'ES', country), # 2016
+         country = ifelse(T1 == 27, 'EE', country), # 2019
+         country = ifelse(T1 == 28, 'NO', country), # 2017
+         country = ifelse(T1 == 29, 'GB', country), # 2015
+         country = ifelse(T1 == 30, 'GB', country), # 2017
+         religion = ifelse(E9 == 7, 'Never', NA),
+         religion = ifelse(E9 %in% c(6,5,4), 'Rarely', religion),
+         religion = ifelse(E9 %in% c(3,2), 'At least once a month', religion),
+         religion = ifelse(E9 == 1, 'At least once a week', religion),
+         education = ifelse(E6a == 0, 'Shorter education', NA),
+         education = ifelse(E6a == 1, 'Shorter education', education),
+         education = ifelse(E6a == 2, 'Shorter education', education),
+         education = ifelse(E6a == 3, 'Shorter education', education),
+         education = ifelse(E6a == 4, 'Shorter education', education),
+         education = ifelse(E6a == 5, 'Medium education', education),
+         education = ifelse(E6a == 6, 'Medium education', education),
+         education = ifelse(E6a == 7, 'Longer education', education),
+         education = ifelse(E6a == 8, 'Longer education', education),
+         year = T3,
+         countryYear = paste(country, year),
+         age = year - E2,
+         gender = ifelse(E1 == 1, 'M', 'F'),
+         E8 = as.character(as.factor(E8)),
+         E8 = ifelse(E8 %in% c('-9', '-1'), NA, E8),
+         elected =  as.numeric(as.factor(T11))
+  ) 
+
+dCCSII$E8 <- gsub("�", '', dCCSII$E8)
+
+d_add_profession = readxl::read_excel('profession.xlsx')
+
+d_add_profession$Professions <- gsub("�", '', d_add_profession$Professions)
+
+dCCSII = left_join(dCCSII, d_add_profession, by = c("E8" = "Professions"))%>% 
+  mutate(E8 = coalesce(as.character(ISCO), E8))
+
+dCCSII = dCCSII %>% mutate(
+  E8 = as.numeric(E8),
+  socialClass = ifelse(substr(abs(E8), 1, 1) %in% c(7,8,9), 'Working class', NA),
+  socialClass = ifelse(substr(abs(E8), 1, 1) %in% c(1,2), 'Salariat', socialClass),
+  socialClass = ifelse(substr(abs(E8), 1, 1) %in% c(3,4,5,6), 'Intermediate employees', socialClass),
+  socialClass2 = ifelse(E7 == 1, 'Self-employed', NA), socialClass = coalesce(socialClass2, socialClass))
+
+dCCSIII = haven::read_sav('CCS-III/2471_CCS_Data_Module3_v1.0.sav') %>% 
+  filter(T1 == 'PRT_2019') %>% 
+  mutate(country = 'PT',
+         year = T3,
+         countryYear = paste(country, year),
+         religion = ifelse(E9 == 7, 'Never', NA),
+         religion = ifelse(E9 %in% c(6,5,4), 'Rarely', religion),
+         religion = ifelse(E9 %in% c(3,2), 'At least once a month', religion),
+         religion = ifelse(E9 == 1, 'At least once a week', religion),
+         education = ifelse(E5 == 0, 'Shorter education', NA),
+         education = ifelse(E5 == 1, 'Shorter education', education),
+         education = ifelse(E5 == 2, 'Shorter education', education),
+         education = ifelse(E5 == 3, 'Shorter education', education),
+         education = ifelse(E5 == 4, 'Medium education', education),
+         education = ifelse(E5 == 5, 'Medium education', education),
+         education = ifelse(E5 == 6, 'Medium education', education),
+         education = ifelse(E5 == 7, 'Longer education', education),
+         education = ifelse(E5 == 8, 'Longer education', education),
+         education = ifelse(E5 == 9, 'Longer education', education),
+         age = year - E2,
+         gender = ifelse(E1 == 1, 'M', 'F'),
+         socialClass = ifelse(substr(abs(E7), 1, 1) %in% c(7,8,9), 'Working class', NA),
+         socialClass = ifelse(substr(abs(E7), 1, 1) %in% c(1,2), 'Salariat', socialClass),
+         socialClass = ifelse(substr(abs(E7), 1, 1) %in% c(3,4,5,6), 'Intermediate employees', socialClass),
+         elected =  as.numeric(as.factor(T11)))
+
+dCCSIII = dCCSIII %>% mutate(socialClass2 = ifelse(E6 == 1, 'Self-employed', NA),
+                         socialClass = coalesce(socialClass2, socialClass))
+
+
+
+
+```
+
+
+Collecting data sets and counting the number of respondands
+
+```{r}
+d_pca = 
+  rbind(dCCSI[,c('country', 'religion', 'education', 'year', 'countryYear', 'age', 'gender', 'socialClass', 'elected')],
+        dCCSII[,c('country', 'religion', 'education', 'year', 'countryYear', 'age', 'gender', 'socialClass', 'elected')],
+        dCCSIII[,c('country', 'religion', 'education', 'year', 'countryYear', 'age', 'gender', 'socialClass', 'elected')])
+
+
+d_pca %>%
+  summarise(
+    country_NA = sum(is.na(country)),
+    religion_NA = sum(is.na(religion)),
+    education_NA = sum(is.na(education)),
+    age_NA = sum(is.na(age)),
+    gender_NA = sum(is.na(gender)),
+    socialClass_NA = sum(is.na(socialClass))
+  )
+
+
+
+d_status = d_pca %>% 
+  filter(!is.na(country),
+         #!is.na(religion),
+         #!is.na(education),
+         #!is.na(year),
+         #!is.na(age),
+         #!is.na(gender),
+         #!is.na(socialClass),
+         elected == 2,
+         ) %>% 
+  group_by(countryYear) %>% 
+  summarise(n = n()) %>% 
+  mutate(size = 
+           c(183,160,160,160,200,101,615, 200, 200, 200, 650, 300, 300, 199, 199, 63, 63, 63, 63, 630,150, 169, 169, 230, 230, 230, 349), # size of parliaments
+           #c(160,200,615,200,200,650,300,300,63,63,630,150,169,169,230,230,230,349),
+         percent = n/size)
+
+d_pca_filter = d_pca %>% 
+  filter(!is.na(country),
+         #!is.na(religion),
+         #!is.na(education),
+         #!is.na(year),
+         #!is.na(age),
+         #!is.na(gender),
+         #!is.na(socialClass),
+         elected == 2,
+         )
+
+d_pca_filter = merge(d_pca_filter, d_status, by="countryYear") 
+
+d_pca_filter = d_pca_filter %>% filter(percent > 0.1)
+
+```
+
+
+Creating social class plot
+
+```{r - social class}
+
+d_status_sc = d_pca %>% 
+  filter(!is.na(country),
+         #!is.na(religion),
+         #!is.na(education),
+         #!is.na(year),
+         #!is.na(age),
+         #!is.na(gender),
+         !is.na(socialClass),
+         elected == 2,
+         ) %>% 
+  group_by(countryYear) %>% 
+  summarise(n = n()) %>% 
+  mutate(size = 
+           c(160, 160, 160, 200, 615, 200, 200, 650, 300, 300, 199, 63, 63, 630, 150, 169, 169, 230, 230, 230, 349),
+           #c(160,200,615,200,200,650,300,300,63,63,630,150,169,169,230,230,230,349),
+         percent = n/size)
+
+d_sc_filter = d_pca %>% 
+  filter(!is.na(country),
+         #!is.na(religion),
+         #!is.na(education),
+         #!is.na(year),
+         #!is.na(age),
+         #!is.na(gender),
+         !is.na(socialClass),
+         elected == 2,
+         )
+
+d_sc_filter = merge(d_sc_filter, d_status_sc, by="countryYear") 
+
+d_sc_filter = d_sc_filter %>% filter(percent > 0.1)
+
+
+sc_plot = d_sc_filter %>% 
+  filter(!is.na(socialClass),
+         !countryYear %in% c('SE 2014', 'NO 2013', 'NL 2006', 'IS 2009', 'FI 2011', 'BE 2010', 'BE 2014')
+         ) %>% 
+  group_by(countryYear, socialClass) %>% 
+  summarise(count = n()) %>%
+  mutate(percentage = count / sum(count) * 100,
+         socialClass = factor(socialClass, levels = c('Working class', 'Self-employed', 'Intermediate employees','Salariat'))) %>% 
+  ggplot(aes(fill=socialClass, y=percentage, x=countryYear)) + 
+  geom_bar(position='stack', stat='identity') +
+  geom_text(aes(label=ifelse(percentage > 3, paste0(round(percentage, 0), "%"), "")), 
+           position=position_stack(vjust=0.5), 
+           size=3, 
+           #label.padding = unit(0.15, "lines")
+           )+
+  scale_fill_manual(values = c("Working class" = '#A97f23', "Self-employed" = '#d8a841', 'Intermediate employees' = '#e9cf95', 'Salariat' = '#f6ecd5'), name = 'Social Class') +
+  labs(y="Percentage", x="Country & Year", fill = 'Social Class', title = 'a)') +
+  coord_flip() +
+  theme_minimal() +
+  theme(legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16),
+        legend.key.size = unit(1.5, "lines"),
+        plot.title = element_text(size = 20),
+        legend.justification = "left")
+
+sc_plot
+```
+
+Creating education plot
+
+```{r education}
+
+d_status_edu = d_pca %>% 
+  filter(!is.na(country),
+         #!is.na(religion),
+         !is.na(education),
+         #!is.na(year),
+         #!is.na(age),
+         #!is.na(gender),
+         #!is.na(socialClass),
+         elected == 2,
+         ) %>% 
+  group_by(countryYear) %>% 
+  summarise(n = n()) %>% 
+  mutate(size = 
+           c(160,160,200,101,615, 200, 200, 650, 300, 300, 199, 199, 63, 63, 63, 63, 630, 150, 169, 169, 230, 230, 230, 349),
+         percent = n/size)
+
+d_edu_filter = d_pca %>% 
+  filter(!is.na(country),
+         #!is.na(religion),
+         !is.na(education),
+         #!is.na(year),
+         #!is.na(age),
+         #!is.na(gender),
+         #!is.na(socialClass),
+         elected == 2,
+         )
+
+d_edu_filter = merge(d_edu_filter, d_status_edu, by="countryYear") 
+
+d_edu_filter = d_edu_filter %>% filter(percent > 0.1)
+
+
+
+edu_plot = d_edu_filter %>% 
+  filter(!is.na(education)) %>% 
+  group_by(countryYear, education) %>% 
+  summarise(count = n()) %>%
+  mutate(percentage = count / sum(count) * 100,
+         education = factor(education, levels = c("Longer education", "Medium education", 'Shorter education'))) %>% 
+  ggplot(aes(fill=education, y=percentage, x=countryYear)) + 
+  geom_bar(position='stack', stat='identity') +
+  geom_text(aes(label=ifelse(percentage > 3, paste0(round(percentage, 0), "%"), "")), 
+           position=position_stack(vjust=0.5), 
+           size=3, 
+           #label.padding = unit(0.15, "lines")
+           )+
+  labs(y="Percentage", x="Country & Year", fill = 'Education', title = 'b)') +
+  scale_fill_manual(values = c("Longer education" = '#0b775e', "Medium education" = '#0fa381', 'Shorter education' = '#2debbf')) +
+  coord_flip() +
+  theme_minimal() +
+  theme(legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16),
+        legend.key.size = unit(1.5, "lines"),
+        plot.title = element_text(size = 20),
+        legend.justification = "left")
+
+edu_plot
+```
+
+
+Creating religion plot
+
+```{r - religion}
+
+d_status_rel = d_pca %>% 
+  filter(!is.na(country),
+         !is.na(religion),
+         #!is.na(education),
+         #!is.na(year),
+         #!is.na(age),
+         #!is.na(gender),
+         #!is.na(socialClass),
+         elected == 2,
+         ) %>% 
+  group_by(countryYear) %>% 
+  summarise(n = n()) %>% 
+  mutate(size = 
+           c(160,160,160,200,615, 200, 200, 650, 300, 300, 199, 63, 63, 63, 63, 630,150, 169, 169, 230, 230, 230, 349),
+           #c(160,200,615,200,200,650,300,300,63,63,630,150,169,169,230,230,230,349),
+         percent = n/size)
+
+d_rel_filter = d_pca %>% 
+  filter(!is.na(country),
+         !is.na(religion),
+         #!is.na(education),
+         #!is.na(year),
+         #!is.na(age),
+         #!is.na(gender),
+         #!is.na(socialClass),
+         elected == 2,
+         )
+
+d_rel_filter = merge(d_rel_filter, d_status_rel, by="countryYear") 
+
+d_rel_filter = d_rel_filter %>% filter(percent > 0.1)
+
+
+rel_plot = d_rel_filter %>% 
+  filter(!is.na(religion)) %>% 
+  group_by(countryYear, religion) %>% 
+  summarise(count = n()) %>%
+  mutate(percentage = count / sum(count) * 100,
+         religion = factor(religion, levels = c('At least once a week', 'At least once a month', 'Rarely', 'Never'))) %>%
+  ggplot(aes(fill=religion, y=percentage, x=countryYear)) + 
+  geom_bar(position='stack', stat='identity') +
+  geom_text(aes(label=ifelse(percentage > 3, paste0(round(percentage, 0), "%"), "")), 
+           position=position_stack(vjust=0.5), 
+           size=3, 
+           #label.padding = unit(0.15, "lines")
+           )+
+  labs(y="Percentage", x="Country & Year", fill = 'Religiosity', title = 'c)') +
+  coord_flip() +
+  scale_fill_manual(values = c("At least once a week" = '#b22222', "At least once a month" = '#de5454', 'Rarely' = '#efa9a9', 'Never' = '#f7d4d4')) +
+  theme(legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16),
+        legend.key.size = unit(1.5, "lines"),
+        plot.title = element_text(size = 20),
+        #legend.position = "left",
+        legend.justification = "left")
+
+rel_plot
+```
+
+Collecting all plots in one 
+
+```{r}
+p_load(cowplot)
+
+legend1 <- get_legend(sc_plot)
+legend2 <- get_legend(edu_plot)
+legend3 <- get_legend(rel_plot)
+
+combined_legend <- plot_grid(legend1, legend2, legend3, ncol = 1)
+
+plot_grid(
+  plot_grid(sc_plot + theme(legend.position = "none",
+                            axis.title.x = element_text(size = 20),
+                            axis.title.y = element_text(size = 20),
+                            ), 
+                   edu_plot + theme(legend.position = "none",
+                                    axis.title.x = element_text(size = 20),
+                                    axis.title.y = element_text(size = 20)),
+                   rel_plot + theme(legend.position = "none",
+                                    axis.title.x = element_text(size = 20),
+                                    axis.title.y = element_text(size = 20)), 
+                   nrow = 1
+          #labels = c('A', 'B'), label_size = 12
+          ),
+  combined_legend,
+  rel_widths = c(4, 1)
+)
+
+
+```
+
+Creating age plot from CCS
+
+```{r - age}
+d_pca_filter %>% 
+  filter(!is.na(age),
+         ! country == 'AT') %>% 
+  mutate(age_group = cut(age, breaks = seq(0, 100, by = 5), right = FALSE)) %>% 
+  group_by(countryYear, age_group) %>% 
+  summarise(count = n()) %>%
+  ggplot(aes(x = age_group, y = count)) +
+  geom_point(color = c_F) +
+  facet_wrap(~countryYear, scales = 'free_y') +
+  labs(y="Count", x="Age") +
+  theme_minimal()
+
+
+```
+
+
+Creating gender plot from CCS
+
+```{r - gender}
+
+df <- d_pca_filter %>% 
+  filter(!is.na(gender)) %>% 
+  group_by(countryYear, gender) %>% 
+  summarise(count = n()) %>%
+  mutate(percentage = count / sum(count) * 100)
+
+# Create the plot
+
+ggplot(df, aes(fill=gender, y=percentage, x=countryYear)) + 
+  geom_bar(position='stack', stat='identity') +
+  geom_text(aes(label=paste0(round(percentage, 1), "%")), 
+            position=position_stack(vjust=0.5), 
+            size=3, 
+            color = ifelse(df$gender == "F", "white", "black")) +  # Corrected color assignment
+  labs(y="Percentage", x="Country & Year", fill = 'Gender') +
+  scale_fill_manual(values = c("F" = c_F, "M" = c_M)) +
+  coord_flip() +
+  theme_minimal() +
+  geom_hline(yintercept = 50, color = 'firebrick', lty = 2)
+
+```
+
+
+
+
+## Parlamint
+
+Loading missing data files
+
+```{r}
+dMissingAge = readxl::read_excel('missingData/missing_age.xlsx')
+dMissingGender = readxl::read_excel('missingData/missing_gender.xlsx')
+```
+
+Creating parlamint data set from country csv's
+
+```{r}
+countries = c("SE", "UA", "PL", "BE", "GR", "NO", "EE", "LV", "RS", "SI", "PT", "ES-GA", "ES-PV", "AT", "BG", "HU", "NL", "HR", "FR", "ES", "FI", "BA", "TR", "CZ", "GB", 'DK', 'ES-CT', 'IS', 'IT')
+
+d = data.frame()
+
+for (country_X in countries) {
+  print(country_X)
+  dCountry = read.csv(paste0('parlamint_csv/', country_X, '.csv')) %>% 
+    filter(Speaker_name != '-') %>% 
+    mutate(Speaker_birth = ifelse(Speaker_birth == '-', NA, Speaker_birth),
+           country = country_X) 
+  
+  dCountry <- merge(dCountry, 
+               dMissingAge,
+               by = c("Speaker_name", "country"),
+               all.x = TRUE) %>% 
+    filter(Speaker_role != 'Chairperson') %>% 
+    mutate(Speaker_birth = coalesce(as.numeric(Speaker_birth), as.numeric(birth))) 
+
+  dCountry <- merge(dCountry, 
+               dMissingGender,
+               by = c("Speaker_name", "country"),
+               all.x = TRUE) %>% 
+    mutate(Speaker_gender = coalesce(Speaker_gender, gender)) 
+  
+  dCountry = dCountry[,c("Date", "Body", "Speaker_name", 'Speaker_gender', 'country', 'Speaker_birth', 'Speaker_role')]
+  
+  d = rbind(d, dCountry)
+}
+
+#write.csv(d, 'metaSpeeches.csv')
+
+#d = read.csv('metaSpeeches.csv')
+
+d = d %>% filter(Speaker_name != '-') %>% 
+  mutate(dateYear = as.numeric(substr(Date, start = 1, stop = 4)),
+         Speaker_birth = as.numeric(Speaker_birth),
+         countryHouse = paste(country, Body)) %>% 
+  drop_na(Speaker_birth) %>% 
+  drop_na(dateYear) %>% 
+  mutate(Speaker_age = dateYear - Speaker_birth) %>% 
+  filter(Speaker_gender != '-')
+
+```
+
+Plotting number of speeches from each country by year
+
+```{r}
+d %>% 
+  filter(! (country == 'NO' & Body != 'Unichameralism' & dateYear < 2010)) %>% 
+  mutate(countryBody = paste(country, '-', Body)) %>% 
+  group_by(countryBody, dateYear) %>% 
+  summarise(n = n()) %>% 
+  ggplot(aes(y = n, x = dateYear)) +
+  geom_bar(stat = 'identity', fill = c_M, color = 'black') +
+  facet_wrap(~ countryBody, scales = 'free') + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        axis.title.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20)) +
+  scale_x_continuous(limits = c(min(d$dateYear), max(d$dateYear)),
+                     breaks = c(1996, 2000, 2005, 2010, 2015, 2019, 2023)) +
+  labs(x = 'Year', y = 'Number of Speeches')
+```
+
+
+Adding election dates to the parlamint data set
+
+```{r}
+library(lubridate)
+
+# Define the election periods for each country or group
+elections = list('AT Lower house' = c('01-01-1996', '03-10-1999', '24-11-2002', '01-10-2006', '28-09-2008', '29-09-2013', '15-10-2017', '29-09-2019', '31-12-2022'),
+             'BA Unicameralism'= c('01-01-1996', '05-10-2002', '01-10-2006','03-10-2010','12-10-2014','07-10-2018','02-10-2022','31-12-2022'),
+             'BE Committee' = c('01-01-1996', '25-05-2014', '26-05-2019', '31-12-2022'),
+             'BE Lower house' = c('01-01-1996', '25-05-2014', '26-05-2019', '31-12-2022'),
+             'BG Unicameralism' = c('01-01-1996', '05-10-2014', '26-03-2017', '04-04-2021', '11-07-2021', '21-11-2021', '31-12-2022'),
+             'CZ Lower house' = c('01-01-1996', '25-10-2013', '20-10-2017', '08-10-2021', '31-12-2023'),
+             'DK Unicameralism' = c('01-01-1996', '18-06-2015', '05-06-2019','31-12-2022'),
+             'EE Unicameralism' = c('01-01-1996', '06-03-2011', '01-03-2015', '03-03-2019', '31-12-2022'),
+             'ES Lower house' = c('01-01-1996', '20-12-2015', '26-06-2016', '28-04-2019', '10-11-2019', '23-07-2023', '31-12-2023'),
+             'ES-CT Unicameralism' = c('01-01-1996', '27-09-2015', '21-12-2017', '14-02-2021', '31-12-2022'),
+             'ES-GA Unicameralism' = c('01-01-1996', '25-09-2016', '12-07-2020', '31-12-2022'),
+             'ES-PV Unicameralism' = c('01-01-1996', '25-09-2016', '12-07-2020', '31-12-2022'),
+             'FI Unicameralism' = c('01-01-1996', '19-04-2015', '14-04-2019', '31-12-2022'),
+             'FR Lower house' = c('01-01-1996', '18-06-2017', '19-06-2022', '31-12-2022'),
+             'GB Lower house' = c('01-01-1996', '07-05-2015', '08-06-2017', '12-12-2019', '31-12-2022'),
+             'GB Upper house' = c('01-01-1996', '16-09-2017', '16-09-2020', '31-12-2022'),
+             'GR Unicameralism' = c('01-01-1996', '25-01-2015', '20-09-2015', '07-07-2019', '31-12-2022'),
+             'HR Unicameralism' = c('01-01-1996', '25-11-2007', '04-12-2011', '08-11-2015', '11-09-2016', '05-07-2020', '31-12-2022'),
+             'HU Unicameralism' = c('01-01-1996', '06-04-2014', '08-04-2018', '03-04-2022', '31-12-2023'),
+             'IS Unicameralism' = c('01-01-1996', '29-10-2016', '28-10-2017', '25-09-2021', '31-12-2022'),
+             'IT Upper house' = c('01-01-1996', '24-02-2013', '04-03-2018', '25-09-2022', '31-12-2022'),
+             'LV Unicameralism' = c('01-01-1996', '04-10-2014', '01-10-2018', '01-10-2022', '31-12-2022'),
+             'NL Lower house' = c('01-01-1996', '12-09-2012', '15-03-2017', '17-03-2021', '31-12-2022'),
+             'NL Upper house' = c('01-01-1996', '26-05-2015', '27-05-2019', '31-12-2022'),
+             'NO Unicameralism' = c('01-01-1996', '14-09-2009', '09-09-2013', '11-09-2017', '13-09-2021', '31-12-2022'),
+             'PL Lower house' = c('01-01-1996', '25-10-2015', '13-10-2019', '31-12-2022'),
+             'PL Upper house' = c('01-01-1996', '25-10-2015', '13-10-2019', '31-12-2022'),
+             'PT Unicameralism' = c('01-01-1996', '04-10-2015', '06-10-2019', '30-01-2022', '31-12-2022'),
+             'RS Unicameralism' = c('01-01-1996', '05-10-1997', '23-12-2000', '28-12-2003', '21-01-2007', '11-05-2008', '06-05-2012', '16-03-2014', '24-04-2016', '21-06-2021', '03-04-2022', '31-12-2022'),
+             'SE Unicameralism' = c('01-01-1996', '14-09-2014', '09-09-2018', '11-09-2022', '31-12-2022'),
+             'SI Lower house' = c('01-01-1996', '15-10-2000', '03-10-2004', '21-09-2008', '04-12-2011', '13-07-2014', '03-06-2018', '24-04-2022', '31-12-2022'),
+             'TR Unicameralism' = c('01-01-1996', '12-06-2011', '07-06-2015', '01-11-2015', '24-06-2018', '31-12-2022'),
+             'UA Unicameralism' = c('01-01-1996', '28-10-2012', '26-10-2014', '21-07-2019','31-12-2023')
+)
+
+# Convert date strings to Date objects
+elections <- lapply(elections, function(dates) as.Date(dates, format = "%d-%m-%Y"))
+
+# Function to determine election period
+get_election_period <- function(date, country_elections) {
+  for (i in seq_along(country_elections[-1])) {
+    if (date >= country_elections[i] & date < country_elections[i + 1]) {
+      return(paste(year(country_elections[i]), year(country_elections[i + 1]), sep = "-"))
+    }
+  }
+  return(NA)
+}
+
+
+d <- d %>%
+  mutate(date = as.Date(Date, format = "%Y-%m-%d"),
+         election = mapply(get_election_period, date, elections[countryHouse])
+         )
+
+mapply(get_election_period, d$date[1], elections[d$countryHouse[1]])
+
+```
+
+Filtering periods with too little data, and plotting parlamint ages
+
+```{r}
+
+df <- d %>% 
+  filter(!is.na(Speaker_age),
+         !(country == 'NO' & Body %in% c('Upper house', 'Lower house')),
+         !(country == 'NO' & dateYear < 2009),
+         Speaker_role == 'Regular',
+         !(country == 'FI' & dateYear == 2022), # too little data
+         !(country == 'RS' & dateYear == 2022) # too little data
+         #!(country == 'FR' & election == '2022-2024'),
+         #!(country == 'RS' & election == '2022-2024'),
+         #Speaker_role == 'Regular'
+         ) %>% 
+  mutate(dateYear = factor(dateYear, levels=sort(unique(d$dateYear))),
+         countryHouse = paste(country, '-', Body),
+         age_group = cut(Speaker_age, breaks = seq(0, 100, by = 10), right = FALSE),) %>% 
+  group_by(Speaker_name, countryHouse, dateYear) %>% 
+  slice(1)
+
+
+df %>% 
+  ggplot(aes(x = Speaker_age, y=dateYear)) +
+  geom_density_ridges(scale = 3, 
+                      #size = 0.3, 
+                      rel_min_height = 0.07, 
+                      quantile_lines = T, 
+                      quantiles = 0.5,
+                      alpha = 0.7,
+                      bandwidth = 2,
+                      fill = c_M
+                      ) +
+  facet_wrap(~countryHouse, scales = 'free') +
+  scale_x_continuous(lim = c(20, 90)) +
+  labs(x = 'Age', y = 'Year')  +
+  scale_y_discrete(breaks = function(y) y[seq(1, length(y), by = 2)]) + 
+  theme(axis.title.x = element_text(size = 20), 
+        axis.title.y = element_text(size = 20)
+        )
+
+
+
+```
+
+Creaiting parlamint gender plot
+
+```{r}
+df_gen <- df %>% 
+  group_by(countryHouse, dateYear, Speaker_gender) %>% 
+  summarise(count = n()) %>%
+  mutate(percentage = count / sum(count) * 100)
+
+
+ggplot(df_gen, aes(fill=Speaker_gender, y=percentage, x=dateYear)) + 
+  geom_bar(position='stack', stat='identity') +
+  geom_text(aes(label=ifelse(countryHouse %in% c('AT - Lower house', 
+                                                 'RS - Unicameralism', 
+                                                 'BA - Unicameralism', 
+                                                 'HR - Unicameralism',
+                                                 'SI - Lower house') & as.numeric(dateYear) %% 2 == 0, '', paste0(round(percentage, 0), "%"))), 
+            position=position_stack(vjust=0.5), 
+            size=3, 
+            color = ifelse(df_gen$Speaker_gender == "F", "white", "black")) +  # Corrected color assignment
+  labs(y="Percentage", x="Country & Year", fill = 'Gender') +
+  scale_fill_manual(values = c("F" = c_F, "M" = c_M)) +
+  coord_flip() +
+  geom_hline(yintercept = 50, color = 'firebrick', lty = 2) +
+  scale_x_discrete(breaks = function(y) y[seq(1, length(y), by = 2)]) + 
+  facet_wrap(~countryHouse, scales = 'free') +
+  theme(axis.title.x = element_text(size = 20), 
+        axis.title.y = element_text(size = 20),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16),
+        legend.key.size = unit(1.5, "lines") 
+        )
+
+```
+
+Preparing and plotting entropy
+
+```{r}
+d_diversity = df %>% 
+  mutate(age_group = cut(Speaker_age, breaks = seq(0, 100, by = 5), right = FALSE),
+         age_gender = paste(Speaker_gender, age_group),
+         Country = paste(country, Body, dateYear)) %>% 
+  group_by(Country, age_gender) %>% 
+  summarise(Value = n()) %>% 
+  data.frame()
+  
+
+d_entropy = diverse::diversity(d_diversity, type = 'entropy') %>% 
+  rownames_to_column() %>%
+  mutate(
+    # Extract country
+    country = sub("^(\\S+-?\\S*)\\s.*$", "\\1", rowname),
+    # Extract year
+    year = sub(".*\\s(\\d{4})$", "\\1", rowname),
+    # Extract governing body
+   Body = sub("^\\S+-?\\S*\\s(.*)\\s\\d{4}$", "\\1", rowname)
+  )
+
+d_entropy %>% 
+  mutate(countryHouse = paste(country, Body)) %>% 
+  #filter(!(country == 'NO' & year < 2010)) %>% 
+  ggplot() +
+  geom_point(aes(x = year, y = entropy)) +
+  facet_wrap(~countryHouse, scales = 'free') +
+  scale_y_continuous(breaks = c(2.2, 2.4, 2.6, 2.8), limits = c(2.1,2.9)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+Fitting lmer model
+
+```{r}
+p_load(lmerTest, optimx)
+
+d_model = d_entropy %>% 
+            #filter(!(country == 'NO' & year < 2010)) %>% 
+            mutate(year_o = as.numeric(year),
+                   year = scale(as.numeric(year)),
+                   cb = paste(country,Body)
+                   )
+
+
+
+m1 = lmer(data = d_model, formula = entropy ~ year + (1 + year | cb))
+
+summary(m1)
+
+ranef(m1) %>% data.frame() %>% 
+  mutate(condval = round(condval, 2),
+         condsd = round(condsd, 2))
+```
+
+Checking assumptions
+
+```{r}
+p_load(janitor, broom.mixed, tidyverse)
+
+# folowing https://ademos.people.uic.edu/Chapter18.html
+# linearity
+plot(resid(m1),d_model$entropy,  ylab = 'Entropy',  xlab = 'Residual')
+
+plot(resid(m1), ylab = 'Residual')
+#qqnorm(resid(m1))
+
+# homogenety
+d_model$m1.Res<- residuals(m1) #extracts the residuals and places them in a new column in our original data table
+d_model$Abs.m1.Res <-abs(d_model$m1.Res) #creates a new column with the absolute value of the residuals
+d_model$m1.Res2 <- d_model$Abs.m1.Res^2 #squares the absolute values of the residuals to provide the more robust estimate
+Levene.m1 <- lm(m1.Res2 ~ cb, data=d_model) #ANOVA of the squared residuals
+anova(Levene.m1) #displays the results # unmet assumption
+
+# normally distributed residuals
+require("lattice")
+
+qqmath(m1, id=0.05) #id: identifies values that may be exerting undue influence on the model (i.e. outliers)
+
+plot( m1, resid(., type = "pearson") ~ fitted(.) | cb,
+  id = 0.05, adj = -0.3 )
+
+```
+
+
+# Investigating presentation of ideas
+
+loading packages
+
+```{r}
+library(pacman)
+
+p_load(tidyverse, 
+       viridis,
+       lmerTest, 
+       haven, 
+       ggridges,
+       readxl, 
+       DHARMa,
+       effects,
+       wesanderson,
+       countreg,
+       distributions3,
+       topmodels)
+
+options(scipen = 999)
+```
+
+```{r}
+theme_set(theme_minimal())
+
+c_F = wes_palette("Rushmore1")[4]
+c_M = wes_palette('Rushmore1')[1]
+c_neu = wes_palette("Royal1")[1]
+c_line = wes_palette("Rushmore1")[3]
+```
+
+plotting speeches by gender, year, and country 
+
+```{r}
+cols_gen <- c("F" = c_F, "M" = c_M)
+
+
+d_all = read.csv('metaSpeeches.csv') %>% 
+  filter(Speaker_gender %in% c('F', 'M'))
+
+d_all = d_all %>% filter(country == 'AT')
+
+
+d_all %>%
+  ggplot(aes(x = Speaker_age, fill = Speaker_gender)) + 
+  geom_bar(position = 'dodge') +
+  theme_minimal() +
+  facet_wrap(~dateYear, scales = 'free') +
+  scale_fill_manual(values = cols_gen, name = "Speaker Gender") 
+```
+
+Preparing zero-inflated data set
+
+```{r - month}
+p_load(DescTools)
+
+d = read.csv('metaSpeeches.csv') %>% 
+  filter(Speaker_gender %in% c('F', 'M'))
+
+dM = d %>% 
+  filter(Speaker_gender %in% c('F', 'M')) %>% 
+  filter(Speaker_age != '-') %>% 
+  filter(Speaker_gender != '-') %>% 
+  mutate(yearMonth = substr(Date, start = 1, stop = 7)) %>% 
+  group_by(yearMonth, Speaker_gender, country, Body) %>% count(Speaker_age) %>% 
+  mutate(dateYear = as.numeric(substr(yearMonth, start = 1, stop = 4)))
+
+
+
+
+# Create a complete grid of all combinations
+all_combinations <- expand.grid(yearMonth = unique(dM$yearMonth), 
+                                Speaker_gender = unique(dM$Speaker_gender), 
+                                Speaker_age =  seq(from = 18, to = 100, by = 1),
+                                country = unique(dM$country),
+                                Body = unique(dM$Body)) %>% 
+  filter((country == 'AT' & Body == 'Lower house') |
+           (country == 'BA' & Body == 'Unicameralism') |
+           (country == 'BE' & Body == 'Lower house') |
+           (country == 'BE' & Body == 'Committee') |
+           (country == 'BG' & Body == 'Unicameralism') |
+           (country == 'CZ' & Body == 'Lower house') |
+           (country == 'DK' & Body == 'Unicameralism') |
+           (country == 'EE' & Body == 'Unicameralism') |
+           (country == 'ES' & Body == 'Lower house') |
+           (country == 'ES-CT' & Body == 'Unicameralism') |
+           (country == 'ES-GA' & Body == 'Unicameralism') |
+           (country == 'ES-PV' & Body == 'Unicameralism') |
+           (country == 'FI' & Body == 'Unicameralism') |
+           (country == 'FR' & Body == 'Lower house') |
+           (country == 'GB' & Body == 'Lower house') |
+           (country == 'GB' & Body == 'Upper house') |
+           (country == 'GR' & Body == 'Unicameralism') |
+           (country == 'HR' & Body == 'Unicameralism') |
+           (country == 'HU' & Body == 'Unicameralism') |
+           (country == 'IS' & Body == 'Unicameralism') |
+           (country == 'IT' & Body == 'Upper house') |
+           (country == 'LV' & Body == 'Unicameralism') |
+           (country == 'NL' & Body == 'Lower house') |
+           (country == 'NL' & Body == 'Upper house') |
+           (country == 'NO' & Body == 'Unicameralism') |
+           (country == 'PL' & Body == 'Lower house') |
+           (country == 'PL' & Body == 'Upper house') |
+           (country == 'PT' & Body == 'Unicameralism') |
+           (country == 'RS' & Body == 'Unicameralism') |
+           (country == 'SE' & Body == 'Unicameralism') |
+           (country == 'SI' & Body == 'Lower house') |
+           (country == 'TR' & Body == 'Unicameralism') |
+           (country == 'UA' & Body == 'Unicameralism'))
+
+# Merge the complete grid with the original data
+merged_df <- all_combinations %>%
+  left_join(dM, by = c("yearMonth", "Speaker_gender", "Speaker_age", 'Body', 'country')) %>%
+  replace_na(list(n = 0)) 
+
+# If dateYear needs to be consistent, re-fill it based on the Date column
+merged_df <- merged_df %>%
+  mutate(dateYear = as.numeric(substr(yearMonth, start = 1, stop = 4)),
+         year_cat = as.factor(dateYear)) %>% 
+  filter(Speaker_age < 100,
+         Speaker_age > 17,
+         ! (country == 'NO' & dateYear < 2009),
+         ! (country == 'BA' & yearMonth < '1998-11'),
+         ! (country == 'BE' & Body == 'Lower house' & yearMonth < '2014-06'),
+         ! (country == 'BE' & Body == 'Committee' & yearMonth < '2014-07'),
+         ! (country == 'BG' & yearMonth < '2014-10'),
+         ! (country == 'CZ' & yearMonth < '2013-11'),
+         ! (country == 'DK' & yearMonth < '2014-10'),
+         ! (country == 'EE' & yearMonth < '2011-04'),
+         ! (country == 'ES' & yearMonth < '2015-01'),
+         ! (country == 'ES-CT' & yearMonth < '2015-10'),
+         ! (country == 'ES-GA' & yearMonth < '2015-01'),
+         ! (country == 'ES-PV' & yearMonth < '2015-02'),
+         ! (country == 'FI' & yearMonth < '2015-05'),
+         ! (country == 'FR' & yearMonth < '2017-06'),
+         ! (country == 'GB' & Body == 'Lower house' & yearMonth < '2015-01'),
+         ! (country == 'GB' & Body == 'Upper house' & yearMonth < '2015-01'),
+         ! (country == 'GR' & yearMonth < '2015-02'),
+         ! (country == 'HR' & yearMonth < '2003-12'),
+         ! (country == 'HU' & yearMonth < '2014-05'),
+         ! (country == 'IS' & yearMonth < '2015-01'),
+         ! (country == 'IT' & yearMonth < '2013-03'),
+         ! (country == 'LV' & yearMonth < '2014-11'),
+         ! (country == 'NL' & Body == 'Lower house' & yearMonth < '2014-04'),
+         ! (country == 'NL' & Body == 'Upper house' & yearMonth < '2014-12'),
+         ! (country == 'PL' & Body == 'Lower house' & yearMonth < '2015-11'),
+         ! (country == 'PL' & Body == 'Upper house' & yearMonth < '2015-11'),
+         ! (country == 'PT' & yearMonth < '2015-01'),
+         ! (country == 'RS' & yearMonth < '1997-12'),
+         ! (country == 'SE' & yearMonth < '2015-09'),
+         ! (country == 'SI' & yearMonth < '2000-10'),
+         ! (country == 'TR' & yearMonth < '2011-06'),
+         ! (country == 'TR' & yearMonth < '2012-12'))
+
+write.csv(merged_df, 'metaSpeechesZeros.csv')
+```
+
+
+Preparing data for modelling
+
+
+```{r}
+d = read.csv('metaSpeechesZeros.csv')
+
+
+# removing 0's that are above and below the highest and lowest observed age
+d = d %>% 
+  mutate(dateYear_0 = dateYear - min(d$dateYear),
+         Speaker_age_0 = Speaker_age - min(d$Speaker_age)) %>% 
+  filter(!(country == 'AT' & Speaker_age < 22),
+         !(country == 'AT' & Speaker_age > 82),
+         !(country == 'BA' & Speaker_age < 22),
+         !(country == 'BA' & Speaker_age > 80),
+         !(country == 'BE' & Speaker_age < 26),
+         !(country == 'BE' & Speaker_age > 77),
+         !(country == 'BG' & Speaker_age < 24),
+         !(country == 'BG' & Speaker_age > 81),
+         !(country == 'CZ' & Speaker_age < 21),
+         !(country == 'CZ' & Speaker_age > 83),
+         !(country == 'DK' & Speaker_age < 22),
+         !(country == 'DK' & Speaker_age > 78),
+         !(country == 'EE' & Speaker_age < 24),
+         !(country == 'EE' & Speaker_age > 79),
+         !(country == 'ES' & Speaker_age < 23),
+         !(country == 'ES' & Speaker_age > 77),
+         !(country == 'ES-CT' & Speaker_age < 25),
+         !(country == 'ES-CT' & Speaker_age > 79),
+         !(country == 'ES-GA' & Speaker_age < 24),
+         !(country == 'ES-GA' & Speaker_age > 80),
+         !(country == 'ES-PV' & Speaker_age < 24),
+         !(country == 'ES-PV' & Speaker_age > 76),
+         !(country == 'FI' & Speaker_age < 24),
+         !(country == 'FI' & Speaker_age > 79),
+         !(country == 'FR' & Speaker_age < 24),
+         !(country == 'FR' & Speaker_age > 81),
+         !(country == 'GB' & Speaker_age < 21),
+         !(country == 'GB' & Speaker_age > 96),
+         !(country == 'GR' & Speaker_age < 24),
+         !(country == 'GR' & Speaker_age > 87),
+         !(country == 'HR' & Speaker_age < 25),
+         !(country == 'HR' & Speaker_age > 79),
+         !(country == 'HU' & Speaker_age < 26),
+         !(country == 'HU' & Speaker_age > 88),
+         !(country == 'IS' & Speaker_age < 19),
+         !(country == 'IS' & Speaker_age > 80),
+         !(country == 'IT' & Speaker_age < 32),
+         !(country == 'IT' & Speaker_age > 94),
+         !(country == 'LV' & Speaker_age < 26),
+         !(country == 'LV' & Speaker_age > 81),
+         !(country == 'NL' & Speaker_age < 23),
+         !(country == 'NL' & Speaker_age > 80),
+         !(country == 'NO' & Speaker_age < 20),
+         !(country == 'NO' & Speaker_age > 86),
+         !(country == 'PL' & Speaker_age < 23),
+         !(country == 'PL' & Speaker_age > 84),
+         !(country == 'PT' & Speaker_age < 22),
+         !(country == 'PT' & Speaker_age > 79),
+         !(country == 'RS' & Speaker_age < 21),
+         !(country == 'RS' & Speaker_age > 92),
+         !(country == 'SE' & Speaker_age < 22),
+         !(country == 'SE' & Speaker_age > 89),
+         !(country == 'SI' & Speaker_age < 22),
+         !(country == 'SI' & Speaker_age > 95),
+         !(country == 'TR' & Speaker_age < 22),
+         !(country == 'TR' & Speaker_age > 83),
+         !(country == 'UA' & Speaker_age < 23),
+         !(country == 'UA' & Speaker_age > 86),
+         )
+
+d = d %>% mutate(age_s = scale(d$Speaker_age),
+                 year = dateYear - 2015)
+
+mean(d$Speaker_age)
+
+sd(d$Speaker_age)
+
+```
+
+First round of modelling (4 models per country)
+
+```{r}
+
+d_modelComparison = data.frame()
+
+for (Country in unique(d$country)){
+  d_country = d %>% filter(country == Country)
+  print(Country)
+  
+  for (body in unique(d_country$Body)) {
+    d_model = d_country %>% filter(Body == body)
+    print(body)
+    print('zip')
+    zip <- zeroinfl(n ~ age_s * Speaker_gender * year,
+                data = d_model, 
+                dist = "poisson")
+    print('zinb')
+    zinb <- zeroinfl(n ~ age_s * Speaker_gender * year,
+                data = d_model, 
+                dist = "negbin")
+    print('hp')
+    hp <- hurdle(n ~ age_s * Speaker_gender * year,
+                data = d_model, 
+                dist = "poisson")
+    print('hnb')
+    hnb <- hurdle(n ~ age_s * Speaker_gender * year,
+                data = d_model, 
+                dist = "negbin")
+
+    d_BIC = BIC(zip, 
+                zinb, 
+                hp,
+                hnb)
+
+
+    d_BIC = d_BIC %>% mutate(Country = Country,
+                             Body = body,
+                             Model = c('ZIP','ZINB','HP','HNB'))
+    
+    d_modelComparison = rbind(d_modelComparison, d_BIC)
+    
+  }
+}
+
+
+```
+
+BIC comparison
+
+```{r}
+cols_body <- c("Committee" = c_neu, 
+              "Lower house" = c_M,
+              'Unicameralism' = 'firebrick',
+              'Upper house' = c_F)
+
+d_modelComparison %>% 
+  ggplot() +
+  geom_point(aes(x = log(BIC), y = Country, shape = Model, color = Body)) +
+  scale_color_manual(values = cols_body, name = "Body") 
+
+ggsave('BIC_models.png')
+
+```
+
+Second round of modelling
+
+```{r}
+models_zinb = list()
+
+i = 1
+country_body = c()
+
+for (Country in unique(d$country)){
+  d_country = d %>% filter(country == Country)
+  print(Country)
+  
+  for (body in unique(d_country$Body)) {
+    country_body = c(country_body, ifelse(length(unique(d_country$Body)) == 1, Country, paste0(Country, '-', substr(body, 1, 3))))
+    
+    d_model = d_country %>% filter(Body == body)
+  
+    zinb <- zeroinfl(n ~ age_s * Speaker_gender * year,
+            data = d_model, 
+            dist = "negbin")
+    
+    models_zinb[[i]] <- zinb
+    
+    i = i + 1
+    
+    print(car::Anova(zinb))
+  }
+}
+
+
+models_hnb = list()
+
+i = 1
+
+for (Country in unique(d$country)){
+  d_country = d %>% filter(country == Country)
+  print(Country)
+  
+  for (body in unique(d_country$Body)) {
+    d_model = d_country %>% filter(Body == body)
+    
+    hnb <- hurdle(n ~ age_s * Speaker_gender * year,
+            data = d_model, 
+            dist = "negbin")
+    
+    models_hnb[[i]] <- hnb
+    
+    i = i + 1
+    
+    print(car::Anova(hnb))
+  }
+}
+
+
+```
+
+Sreating rootgrams
+
+```{r}
+
+# Loop through each model and plot the rootogram
+for (i in 1:33) {
+  print(country_body[[i]])
+  rootogram(models_hnb[[i]], ylim = c(-5, 30), xlim = c(0,200), max = 10)
+  
+  ggsave(paste(country_body[[i]], '-Root-HNB.png'))
+}
+
+i = 20 # 
+
+country_body[[i]]
+rootogram(models_zinb[[i]], ylim = c(-5, 30), xlim = c(0,200), max = 10)
+
+for (i in 1:33) {
+  print(country_body[[i]])
+  rootogram(models_zinb[[i]], ylim = c(-5, 30), xlim = c(0,200), max = 10)
+  
+  ggsave(paste(country_body[[i]], '-Root-ZINB.png'))
+}
+
+
+#cowplot::plot_grid(rg) + ylim(-5, 30) + xlim(0,500)
+
+```
+
+UA is too big for r to run - below is a replica of the plot
+
+```{r}
+
+cc = 'UA'
+
+
+zinb <- zeroinfl(n ~ age_s * Speaker_gender * year,
+            data = d %>% filter(country == 'UA'), 
+            dist = "negbin")
+
+summary(zinb)
+
+# Predicted probabilities
+p = predict(zinb, type = "zero")
+
+# Predicted counts
+mus = predict(zinb, type = "count")
+
+
+sim1 = VGAM::rzinegbin(n = nrow(d %>% filter(country == 'UA')),
+                 size = zinb$theta,
+                 pstr0 = p,
+                 munb = mus)
+
+sim_zinb = replicate(10, VGAM::rzinegbin(n = nrow(d %>% filter(country == 'UA')),
+                                   size = zinb$theta,
+                                   pstr0 = p,
+                                   munb = mus))
+
+d_sims = d %>% filter(country == 'UA')
+
+sim_res_zinb = DHARMa::createDHARMa(simulatedResponse = sim_zinb,
+                            observedResponse = d_sims$n,
+                            fittedPredictedResponse = predict(zinb, type = "response"),
+                            integerResponse = TRUE)
+
+
+
+
+# Filter and summarize data for the observed counts
+observed_data <- d %>%
+  filter(country == 'UA') %>%
+  group_by(n) %>%
+  summarise(observed_counts = n())
+
+# Prepare data for the expected counts (simulated response)
+expected_data <- sim_res_zinb$simulatedResponse %>%
+  as.list() %>%
+  unlist() %>%
+  data.frame(value = .) %>%
+  mutate(n = as.factor(value)) %>%
+  group_by(n) %>%
+  summarise(expected_counts = n()/10) %>%
+  mutate(n = as.numeric(n))
+
+# Join observed and expected data
+rootgram_data <- observed_data %>%
+  left_join(expected_data, by = "n") %>%
+  mutate(
+    observed_sqrt = sqrt(observed_counts),
+    expected_sqrt = sqrt(expected_counts),
+    hanging_height = observed_sqrt - expected_sqrt,
+    fill_color = ifelse(hanging_height > 0, 'over', 'under')
+  )
+
+fill_vals <- c("under" = 'grey', 
+              "over" = 'white')
+
+color_vals <- c("under" = 'black', 
+              "over" = 'white')
+
+# Create the hanging rootogram plot
+ggplot(rootgram_data) +
+  geom_col(aes(x = n, y = observed_sqrt), fill = 'grey', color = 'black') +
+  geom_col(aes(x = n, y = hanging_height, fill = fill_color, color = fill_color)) +
+  geom_point(aes(x = n, y = hanging_height + expected_sqrt), color = '#df536b') +
+  geom_hline(yintercept = 0, linetype = "solid") +
+  labs(x = "n", y = "sqrt(Frequency)") +
+  xlim(0,200) + ylim(-5, 30) +
+  scale_fill_manual(values = fill_vals) +
+  scale_color_manual(values = color_vals)
+
+```
+
+Creating qqplots
+
+```{r}
+
+
+# Loop through each model and plot the rootogram
+for (i in 1:33) {
+  #print(paste(country_body[[i]],'-ZINB.png'))
+  qqrplot(models_zinb[[i]])
+  
+  #ggsave(paste(country_body[[i]],'-qqrplt-ZINB.png'))
+}
+
+for (i in 1:33) {
+  #print(paste(country_body[[i]],'-ZINB.png'))
+  qqrplot(models_hnb[[i]])
+  
+  #ggsave(paste(country_body[[i]],'-qqrplt-HNB.png'))
+}
+
+
+
+#i = 33 # 
+
+#country_body[[i]]
+#rootogram(models_hnb[[i]], ylim = c(-5, 30), xlim = c(0,200), max = 10)
+
+# Reset the plotting layout to default (1 plot per page)
+
+```
+
+Creating coef tables - count part of model
+
+```{r}
+
+for (i in 1:33) {
+  # Extract the coefficients table
+  coeff_table <- summary(models_hnb[[i]])[["coefficients"]]$count
+  
+  # Define a function to format the coefficients
+  format_coeff <- function(estimate, std_error, p_value) {
+    # Determine the significance level based on the p-value
+    stars <- ifelse(p_value < 0.001, "***", 
+             ifelse(p_value < 0.01, "**", 
+             ifelse(p_value < 0.05, "*", "")))
+    
+    # Format the coefficient as "estimate (std_error) significance"
+    paste0(round(estimate, 2), " (", round(std_error, 2), ") ", stars)
+  }
+  
+  # Apply the formatting function to each coefficient
+  formatted_coeff <- apply(coeff_table, 1, function(x) format_coeff(x["Estimate"], x["Std. Error"], x["Pr(>|z|)"]))
+  
+  # Combine the formatted coefficients into a LaTeX table row
+  latex_row <- paste(c(country_body[[i]], formatted_coeff), collapse = " & ")
+  
+  # Print the final LaTeX row
+  print(cat(latex_row, "\\\\"))
+}
+
+
+```
+
+Creating coef tables - hurdle part of model
+
+```{r}
+for (i in 1:33) {
+  # Extract the coefficients table
+  coeff_table <- summary(models_hnb[[i]])[["coefficients"]]$zero
+  
+  # Define a function to format the coefficients
+  format_coeff <- function(estimate, std_error, p_value) {
+    # Determine the significance level based on the p-value
+    stars <- ifelse(p_value < 0.001, "***", 
+             ifelse(p_value < 0.01, "**", 
+             ifelse(p_value < 0.05, "*", "")))
+    
+    # Format the coefficient as "estimate (std_error) significance"
+    paste0(round(estimate, 2), " (", round(std_error, 2), ") ", stars)
+  }
+  
+  # Apply the formatting function to each coefficient
+  formatted_coeff <- apply(coeff_table, 1, function(x) format_coeff(x["Estimate"], x["Std. Error"], x["Pr(>|z|)"]))
+  
+  # Combine the formatted coefficients into a LaTeX table row
+  latex_row <- paste(c(country_body[[i]], formatted_coeff), collapse = " & ")
+  
+  # Print the final LaTeX row
+  print(cat(latex_row, "\\\\"))
+}
+```
+
+creating exponentiated tables
+
+```{r}
+for (i in 1:33) {
+  # Extract the coefficients table
+  coeff_table <- summary(models_hnb[[i]])[["coefficients"]]$count
+  
+  # Define a function to format the coefficients
+  format_coeff <- function(estimate, p_value) {
+    # Determine the significance level based on the p-value
+    stars <- ifelse(p_value < 0.001, "***", 
+             ifelse(p_value < 0.01, "**", 
+             ifelse(p_value < 0.05, "*", "")))
+    
+    # Format the coefficient as "estimate (std_error) significance"
+    paste0(round(exp(estimate), 2), " ", stars)
+  }
+  
+  # Apply the formatting function to each coefficient
+  formatted_coeff <- apply(coeff_table, 1, function(x) format_coeff(x["Estimate"] , x["Pr(>|z|)"]))
+  
+  # Combine the formatted coefficients into a LaTeX table row
+  latex_row <- paste(c(country_body[[i]], formatted_coeff), collapse = " & ")
+  
+  # Print the final LaTeX row
+  print(cat(latex_row, "\\\\"))
+}
+```
+
+```{r}
+for (i in 1:33) {
+  # Extract the coefficients table
+  coeff_table <- summary(models_hnb[[i]])[["coefficients"]]$zero
+  
+  # Define a function to format the coefficients
+  format_coeff <- function(estimate, p_value) {
+    # Determine the significance level based on the p-value
+    stars <- ifelse(p_value < 0.001, "***", 
+             ifelse(p_value < 0.01, "**", 
+             ifelse(p_value < 0.05, "*", "")))
+    
+    # Format the coefficient as "estimate (std_error) significance"
+    paste0(round(exp(estimate), 2), " ", stars)
+  }
+  
+  # Apply the formatting function to each coefficient
+  formatted_coeff <- apply(coeff_table, 1, function(x) format_coeff(x["Estimate"] , x["Pr(>|z|)"]))
+  
+  # Combine the formatted coefficients into a LaTeX table row
+  latex_row <- paste(c(country_body[[i]], formatted_coeff), collapse = " & ")
+  
+  # Print the final LaTeX row
+  print(cat(latex_row, "\\\\"))
+}
+```
+
+Plotting the coefficients
+
+```{r}
+d_count = data.frame()
+
+for (i in 1:33) {
+  d_sum = data.frame(summary(models_hnb[[i]])[["coefficients"]]$count) 
+
+  d_sum <- tibble::rownames_to_column(d_sum, "Parameter")
+
+  d_sum = d_sum %>% 
+    mutate(Lower = Estimate - 1.96 * Std..Error,
+         Upper = Estimate + 1.96 * Std..Error,
+         Country = country_body[i],
+         Color = ifelse(Lower <= 0 & Upper >= 0, "Not significant", ""),
+         Color = ifelse(Lower > 0 & Upper > 0, 'Positive', Color),
+         Color = ifelse(Lower < 0 & Upper < 0, 'Negative', Color),
+         Parameter = c('Int','Age', 'Gender', 'Year', 'Age * Gender', 'Age * Year', 'Gender * Year', 'Age * Gender * Year', 'Log')
+         ) %>% 
+    filter(Parameter != 'Int',
+         Parameter != 'Log')
+  
+  d_count = rbind(d_count, d_sum)
+  
+}
+
+d_count$Parameter <- factor(d_count$Parameter, levels = c('Age', 'Gender', 'Year', 'Age * Gender', 'Age * Year', 'Gender * Year', 'Age * Gender * Year'))
+
+
+d_count %>% 
+  ggplot() +
+  geom_point(aes(y = Country, x = Estimate, color = Color)) +
+  geom_vline(xintercept = 0, color = 'firebrick', lty = 2) +
+  geom_errorbarh(aes(xmin = Lower, xmax = Upper, y = Country, color = Color), height = 0.2) +
+  facet_wrap(~Parameter, scales = 'free', nrow = 2, ncol = 4) + 
+  scale_color_manual(values = c("Positive" = c_F, "Negative" = c_M, 'Not significant' = c_neu)) +
+  theme(axis.title.x = element_text(size = 20), 
+        axis.title.y = element_text(size = 20),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16),
+        legend.key.size = unit(1.5, "lines"))
+
+
+
+```
+
+Plotting the coefficients
+
+
+```{r}
+d_zero = data.frame()
+
+for (i in 1:33) {
+  d_sum = data.frame(summary(models_hnb[[i]])[["coefficients"]]$zero) 
+
+  d_sum <- tibble::rownames_to_column(d_sum, "Parameter")
+
+  d_sum = d_sum %>% 
+    mutate(Lower = Estimate - 1.96 * Std..Error,
+         Upper = Estimate + 1.96 * Std..Error,
+         Country = country_body[i],
+         Color = ifelse(Lower <= 0 & Upper >= 0, "Not significant", ""),
+         Color = ifelse(Lower > 0 & Upper > 0, 'Positive', Color),
+         Color = ifelse(Lower < 0 & Upper < 0, 'Negative', Color),
+         Parameter = c('Int','Age', 'Gender', 'Year', 'Age * Gender', 'Age * Year', 'Gender * Year', 'Age * Gender * Year')
+         ) %>% 
+    filter(Parameter != 'Int')
+  
+  d_zero = rbind(d_zero, d_sum)
+}
+
+
+d_zero$Parameter <- factor(d_zero$Parameter, levels = c('Age', 'Gender', 'Year', 'Age * Gender', 'Age * Year', 'Gender * Year', 'Age * Gender * Year'))
+
+d_zero %>% 
+  ggplot() +
+  geom_point(aes(y = Country, x = Estimate, color = Color)) +
+  geom_vline(xintercept = 0, color = 'firebrick', lty = 2) +
+  geom_errorbarh(aes(xmin = Lower, xmax = Upper, y = Country, color = Color), height = 0.2) +
+  facet_wrap(~Parameter, scales = 'free', nrow = 2, ncol = 4) + 
+  scale_color_manual(values = c("Positive" = c_F, "Negative" = c_M, 'Not significant' = c_neu))+
+  theme(axis.title.x = element_text(size = 20), 
+        axis.title.y = element_text(size = 20),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16),
+        legend.key.size = unit(1.5, "lines"))
+```
+
+Creating correlation plots of the coefs
+
+```{r}
+# Load required libraries
+p_load(GGally)
+library(ggplot2)
+
+# Prepare the data (as you've done)
+data_wide <- d_count %>%
+  dplyr::select(Parameter, Country, Estimate) %>%
+  pivot_wider(names_from = Country, values_from = Estimate) %>% 
+  t() %>% data.frame()
+
+new_colnames <- as.character(unlist(data_wide[1,]))
+
+# Remove the first row from the data frame
+data_wide <- data_wide[-1, ]
+
+# Assign the new column names to the data frame
+colnames(data_wide) <- c( "Age","Gender","Year","A * G", "A * Y","G * Y","A * G * Y")
+
+# Ensure all columns are numeric
+data_wide[] <- lapply(data_wide, function(x) as.numeric(as.character(x)))
+
+# Convert back to a data frame to use with GGally
+data_wide <- as.data.frame(data_wide)
+
+# Create pair plot with GGally (including correlation coefficients and scatter plots)
+ggpairs(data_wide, 
+        title = "COUNT Scatterplot Matrix with Correlation Coefficients",
+        upper = list(continuous = wrap("cor", size = 4)),  # Correlation coefficients in upper triangle
+        lower = list(continuous = "smooth"),  # Scatter plots in lower triangle
+        diag = list(continuous = "densityDiag")  # Density plots on diagonal
+)
+
+```
+
+Creating correlation plots of the coefs
+
+```{r}
+# Prepare the data (as you've done)
+data_wide <- d_zero %>%
+  dplyr::select(Parameter, Country, Estimate) %>%
+  pivot_wider(names_from = Country, values_from = Estimate) %>% 
+  t() %>% data.frame()
+
+new_colnames <- as.character(unlist(data_wide[1,]))
+
+# Remove the first row from the data frame
+data_wide <- data_wide[-1, ]
+
+# Assign the new column names to the data frame
+colnames(data_wide) <- c( "Age","Gender","Year","A * G", "A * Y","G * Y","A * G * Y")
+
+# Ensure all columns are numeric
+data_wide[] <- lapply(data_wide, function(x) as.numeric(as.character(x)))
+
+# Convert back to a data frame to use with GGally
+data_wide <- as.data.frame(data_wide)
+
+# Create pair plot with GGally (including correlation coefficients and scatter plots)
+ggpairs(data_wide, 
+        title = "HURDLE Scatterplot Matrix with Correlation Coefficients",
+        upper = list(continuous = wrap("cor", size = 4)),  # Correlation coefficients in upper triangle
+        lower = list(continuous = "smooth"),  # Scatter plots in lower triangle
+        diag = list(continuous = "densityDiag")  # Density plots on diagonal
+)
+```
+
+
+# Investigating influence
+
+loading packages
+```{r}
+library(pacman)
+
+p_load(tidyverse, 
+       viridis,
+       lmerTest, 
+       haven, 
+       ggridges,
+       readxl, 
+       DHARMa,
+       effects,
+       wesanderson,
+       countreg,
+       distributions3,
+       topmodels)
+
+options(scipen = 999)
+```
+
+```{r}
+theme_set(theme_minimal())
+
+c_F = wes_palette("Rushmore1")[4]
+c_M = wes_palette('Rushmore1')[1]
+c_neu = wes_palette("Royal1")[1]
+c_line = wes_palette("Rushmore1")[3]
+```
+
+loading the roc data and plotting ROC curves
+
+```{r ROC}
+d_roc <- read.csv('influence/ROC.csv') %>% 
+  mutate(house = ifelse(house == 'upp', 'Upper house', house),
+         house = ifelse(house == 'low', 'Lower house', house),
+         house = ifelse(house == 'com', 'Committee', house),
+         house = ifelse(country == 'AT', 'Lower house', house),
+         house = ifelse(country == 'CZ', 'Lower house', house),
+         house = ifelse(country == 'ES', 'Lower house', house),
+         house = ifelse(country == 'FR', 'Lower house', house),
+         house = ifelse(country == 'IT', 'Lower house', house),
+         house = ifelse(country == 'SI', 'Lower house', house),
+         house = ifelse(house == 'all', 'Unicamerialism', house),
+         country = ifelse(country == 'ESCT', 'ES-CT', country),
+         country = ifelse(country == 'ESGA', 'ES-GA', country),
+         country = ifelse(country == 'ESPV', 'ES-PV', country),
+    countryYear = paste(country, house, year))
+
+
+unique_groups <- d_roc %>% dplyr::select(country, year, house, countryYear) %>% distinct()
+
+d_roc = d_roc %>%
+  group_by(countryYear) %>%
+  bind_rows({
+    unique_groups
+    data.frame(
+      fpr = rep(0, nrow(unique_groups)),
+      tpr = rep(0, nrow(unique_groups)),
+      country = unique_groups$country,
+      year = unique_groups$year,
+      house = unique_groups$house,
+      countryYear = unique_groups$countryYear
+    )
+  }) %>%
+  ungroup() 
+
+d_roc %>% 
+  filter(country != 'FR') %>% 
+  mutate(countryHouse = paste(country, '-', house)) %>% 
+  ggplot() +
+  geom_line(aes(x = fpr, y = tpr, fill = countryYear), colour = c_F, alpha = 0.8, size = 1) + 
+  geom_abline(intercept = 0, slope = 1, color = 'firebrick', lty = 2) +
+  labs(x = "False Positive Rate",
+       y = "True Positive Rate",
+       color = "Country-Year") +
+  facet_wrap(~countryHouse) +
+  theme_minimal() + 
+  theme(axis.title.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20)
+        )
+```
+
+plotting AUC as barplot
+
+```{r}
+p_load("pracma")
+
+
+roc_sorted <- d_roc[order(d_roc$fpr), ]
+
+
+auc_list =
+  roc_sorted %>% 
+  group_by(country, house, year) %>% 
+  summarise(auc = trapz(fpr, tpr))
+
+auc_list %>%
+  filter(country != 'FR') %>% 
+  mutate(year = gsub("([0-9]{4})([0-9]{4})", "\\2 - \\1", year),
+         year = factor(year, levels = unique(year)),
+         countryHouse = paste(country, '-', house)) %>% 
+  ggplot(aes(x = as.character(year), y = auc)) +  # Ensure year is treated as a factor
+  geom_bar(fill = c_M, stat = "identity", color = 'black') +             # Use stat = "identity" for y values
+  geom_text(aes(label = scales::percent(round(auc, 2))),  # Add percentage labels
+            vjust = 1.5,                      # Position labels slightly above bars
+            color = "black") +                 # Label color
+  facet_wrap(~countryHouse, scales = 'free') +                    # Facet by country
+  labs(x = "Election Period", y = "AUC", title = "AUC by Year and Country") + # Labels
+  scale_y_continuous(breaks=c(0, 0.25, 0.5, 0.75, 1), lim = c(0, 1)) +
+  scale_fill_manual(values = cols, 
+                    name = "Year mean") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20)
+        ) 
+
+
+```
+
+reading the influences
+
+
+```{r}
+d = read_csv('influence/influenceSum.csv') %>% 
+  mutate(birthdays = as.numeric(birthdays))
+
+```
+
+prepare data for analysis
+
+```{r}
+# Function to replace values in the house column
+replace_house <- function(house) {
+  if (str_detect(house, "com")) {
+    return("com")
+  } else if (str_detect(house, "low")) {
+    return("low")
+  } else if (str_detect(house, "all")) {
+    return("all")
+  } else if (str_detect(house, "upp")) {
+    return("upp")
+  } else {
+    return(NA)  # Return NA for values that don't match any criteria
+  }
+}
+
+calculate_average_age <- function(years, birthdays) {
+  # Extract start and end years from the years column
+  start_year <- as.numeric(substr(as.character(years), 1, 4))
+  end_year <- as.numeric(substr(as.character(years), 5, 8))
+  
+  # Calculate age in each year
+  ages <- (start_year:end_year) - birthdays
+  
+  # Return the average age over the period
+  return(mean(ages))
+}
+
+# Apply the function to the house column
+d <- d %>% mutate(house = sapply(house, replace_house),
+                  CountryHouse = paste0(country, house),
+                  nameYear = paste(name, years)) %>% 
+  filter(gender != '-',
+         role == 'Regular',
+         !is.na(birthdays)) %>% 
+    #distinct(nameYear, .keep_all = TRUE) %>% 
+  rowwise() %>% 
+  mutate(age = calculate_average_age(years, birthdays),
+         age_group = cut(age, 
+                         breaks = seq(0, max(age, na.rm = TRUE) + 10, by = 10), 
+                         labels = paste0(seq(0, max(age, na.rm = TRUE), by = 10), "-", seq(10, max(age, na.rm = TRUE) + 10, by = 10)),
+                         include.lowest = TRUE))
+
+```
+
+plotting influences
+
+```{r}
+d %>% 
+  #filter(country == 'AT') %>% 
+  ggplot(aes(x = sum, y = age, color = gender)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = 'lm') +
+  facet_wrap(~CountryHouse, scales = 'free_x') +
+  #labs(x = 'Age', y = 'Influence', color = 'Gender') +
+  theme_minimal() 
+  #theme(legend.position = "none") 
+```
+
+transforming influence and fitting model
+
+```{r}
+p_load(lmerTest)
+
+d_m = d %>% 
+  filter(age < 100) # removing outliers
+
+d_m$age_s = scale(d_m$age)
+d_m$age2 = d_m$age_s * d_m$age_s
+
+d_m$influence = sqrt(d_m$sum)
+
+m1.1 <- lmerTest::lmer(formula = influence ~ gender * age_s + (1 | country:body:name), 
+                     data = d_m)
+
+
+ggplot(d_m, aes(x=influence, fill = gender)) + geom_density()
+```
+
+
+
+```{r}
+sd(d_m$influence)
+mean(d_m$influence)
+
+summary(m1.1)
+```
+
+checking assumptions
+
+```{r}
+p_load(janitor, broom.mixed)
+
+# https://ademos.people.uic.edu/Chapter18.html
+# linearity
+plot(resid(m1.1),d_m$influence,  ylab = 'Influence',  xlab = 'Residual')
+#qqnorm(resid(m1))
+d_model = d_m
+# homogenety
+d_model$m1.1.Res<- residuals(m1.1) #extracts the residuals and places them in a new column in our original data table
+d_model$Abs.m1.1.Res <-abs(d_model$m1.1.Res) #creates a new column with the absolute value of the residuals
+d_model$m1.1.Res2 <- d_model$Abs.m1.1.Res^2 #squares the absolute values of the residuals to provide the more robust estimate
+Levene.m1.1 <- lm(m1.1.Res2 ~ country:body, data=d_model) #ANOVA of the squared residuals
+anova(Levene.m1.1) #displays the results # unmet assumption
+
+# normally distributed residuals
+require("lattice")
+
+qqmath(m1.1, id=0.05) #id: identifies values that may be exerting undue influence on the model (i.e. outliers)
+
+plot(m1.1, resid(., type = "pearson") ~ fitted(.) | CountryHouse,
+  id = 0.05, adj = -0.3 )
+```
+
+
